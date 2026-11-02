@@ -1,0 +1,6 @@
+build/
+build-win/
+dist/
+gdhost-data/
+external/win/
+build-a64/

@@ -1,0 +1,91 @@
+# Compila el port de Android (64 bits) y lo publica como pre-release "android-test".
+name: Android (64 bits)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android/**'
+      - 'host/**'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Código de SDL2 y SDL2_mixer
+        run: |
+          cd android/app/src/main/cpp
+          curl -sSL https://github.com/libsdl-org/SDL/releases/download/release-2.30.9/SDL2-2.30.9.tar.gz | tar xz
+          mv SDL2-2.30.9 SDL
+          curl -sSL https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.8.0/SDL2_mixer-2.8.0.tar.gz | tar xz
+          mv SDL2_mixer-2.8.0 SDL_mixer
+          # Cabeceras de Boost (las usa dynarmic), aparte para no mezclar /usr/include con el NDK
+          sudo apt-get install -y -qq libboost-dev > /dev/null
+          mkdir -p boost-inc && cp -r /usr/include/boost boost-inc/
+
+      - name: APK del juego (release "apk")
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p android/app/src/main/assets
+          gh release download apk -R "${{ github.repository }}" -p "*.apk" -O android/app/src/main/assets/game.apk
+          ls -la android/app/src/main/assets
+
+      - name: Diagnóstico (todos los errores de C++ de una vez)
+        continue-on-error: true
+        run: |
+          NDK=$(ls -d $ANDROID_HOME/ndk/* | sort -V | tail -1)
+          cmake -S android/app/src/main/cpp -B /tmp/diag -G Ninja -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release > /tmp/diag.log 2>&1 || tail -40 /tmp/diag.log
+          ninja -C /tmp/diag -k 0 gdhost 2>&1 | grep -E "error:|undefined" | sort -u | head -80
+
+      - name: Clave de firma (secret)
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then echo "$KS" | base64 -d > android/app/gdps13.keystore; echo "clave fija"; else echo "sin secret: clave de pruebas"; fi
+
+      - name: Compilar
+        env:
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: |
+          NDK=$(ls -d $ANDROID_HOME/ndk/2[78].* | sort -V | tail -1); echo "NDK $NDK"; gradle -p android assembleRelease -PndkVer=$(basename $NDK) -q > /tmp/gradle.log 2>&1 && exit 0
+          echo "===== ERRORES ====="; grep -E "error:|undefined reference" /tmp/gradle.log | sort -u | head -40
+          exit 1
+
+      - name: Publicar APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk 13GDPS-android64.apk
+          gh release delete android-test --yes --cleanup-tag || true
+          gh release create android-test 13GDPS-android64.apk --prerelease \
+            --target "${{ github.sha }}" --title "Android 64 bits (prueba)" \
+            --notes "APK de prueba del port de 64 bits. Compilado desde ${{ github.sha }}."
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: android-build
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/.cxx/**/*.log
+          if-no-files-found: ignore

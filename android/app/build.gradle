@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'app.gdps13.port'
+    compileSdk 34
+    if (project.hasProperty('ndkVer')) ndkVersion project.property('ndkVer')
+
+    defaultConfig {
+        applicationId 'app.gdps13.port'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '0.1'
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_static', '-DCMAKE_BUILD_TYPE=Release'
+            }
+        }
+    }
+
+    signingConfigs {
+        // Clave fija del proyecto: así cada versión nueva se instala encima de la anterior.
+        // La clave la escribe el workflow desde el secret ANDROID_KEYSTORE_B64 (no está en el repo).
+        fija {
+            storeFile file('gdps13.keystore')
+            storePassword System.getenv('ANDROID_KEYSTORE_PASS') ?: ''
+            keyAlias 'gdps13'
+            keyPassword System.getenv('ANDROID_KEYSTORE_PASS') ?: ''
+        }
+    }
+
+    buildTypes {
+        release {
+            // Versión normal (no depurable). Sin la clave del secret, se firma con la de pruebas.
+            signingConfig file('gdps13.keystore').exists() ? signingConfigs.fija : signingConfigs.debug
+            minifyEnabled false
+            debuggable false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    sourceSets {
+        main {
+            // Clases Java de SDL (se descargan con el código de SDL, ver .github/workflows/android.yml)
+            java.srcDirs += 'src/main/cpp/SDL/android-project/app/src/main/java'
+        }
+    }
+
+    androidResources {
+        noCompress 'apk'  // el APK del juego va tal cual dentro del nuestro
+    }
+
+    packagingOptions {
+        // Librerías sin comprimir y alineadas a 16 KB dentro del APK (Android 15+ lo verifica)
+        jniLibs { useLegacyPackaging false }
+    }
+}

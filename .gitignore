@@ -1,0 +1,5 @@
+android/app/gdps13.keystore
+android/app/src/main/assets/game.apk
+host/build*/
+host/dist/
+host/external/win/
